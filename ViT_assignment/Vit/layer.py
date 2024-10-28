@@ -11,12 +11,52 @@ class EmbeddingLayer(nn.Module):
     def __init__(self, in_chans, embed_dim, img_size, patch_size):
         super().__init__()
         # TODO
+        self.in_chans = in_chans
+        self.embed_dim = embed_dim
+        self.img_size = img_size
+        self.patch_size = patch_size
         
+        self.num_patches = (img_size // patch_size) ** 2
 
-    def forward(self, x):
+        # 패치를 임베딩하는 Conv2d: 패치 크기를 커널과 스트라이드로 설정
+        self.proj = nn.Conv2d(in_chans, embed_dim, 
+                              kernel_size=patch_size, 
+                              stride=patch_size)
+
+        # 학습 가능한 [CLS] 토큰 생성 (1개 추가)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        
+        # 학습 가능한 위치 임베딩 (CLS + 패치 수만큼 생성)
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.num_patches + 1, embed_dim))
+        trunc_normal_(self.pos_embed, std=0.02)  # 위치 임베딩 초기화
+
+
+    def forward(self, x):  
+        # shape of x : (N, 3, 32, 32)
+        # shape of return : (N, #ofPatches+1, embed_dim)
+
         # 각 patch를 임베딩 후 class token과 concat
         # positional embedding까지 더하기
         # TODO
+
+        N = x.shape[0]
+
+        # Conv2d로 패치 임베딩 수행, shape: (N, embed_dim, num_patches**0.5, num_patches**0.5)
+        x = self.proj(x).flatten(2).transpose(1, 2)  # shape: (N, num_patches, embed_dim)
+
+        # [CLS] 토큰을 배치 크기에 맞게 확장
+        cls_tokens = self.cls_token.expand(N, -1, -1)  # shape: (N, 1, embed_dim)
+
+        # [CLS] 토큰과 패치 임베딩을 concat
+        x = torch.cat((cls_tokens, x), dim=1)  # shape: (N, num_patches + 1, embed_dim)
+
+        # 위치 임베딩 추가
+        x = x + self.pos_embed  # shape: (N, num_patches + 1, embed_dim)
+        return x
+
+
+
+
     
     
 class MSA(nn.Module):

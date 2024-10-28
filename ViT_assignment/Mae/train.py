@@ -118,4 +118,5 @@ def train_mae_model():
     run_one_image(img, model, device)
 
 if __name__ == "__main__":
+
     train_mae_model()

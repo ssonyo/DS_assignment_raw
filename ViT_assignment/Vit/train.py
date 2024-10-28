@@ -91,7 +91,7 @@ def main():
             loss = criterion(output, target)
 
             optimizer.zero_grad()
-            loss.backward()
+            loss.backward() 
             optimizer.step()
 
             epoch_loss += loss.item()

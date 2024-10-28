@@ -38,7 +38,7 @@ class MaskedAutoencoderViT(nn.Module):
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
 
-        self.norm_pix_loss = norm_pix_loss
+        self.norm_pix_loss = norm_pix_loss  # 마스킹된 픽셀과 복원된 픽셀 사이의 손실을 계산할 때, 정규화 여부
 
         self.initialize_weights()
 
@@ -81,7 +81,7 @@ class MaskedAutoencoderViT(nn.Module):
         assert imgs.shape[2] == imgs.shape[3] and imgs.shape[2] % p == 0
 
         h = w = imgs.shape[2] // p
-        x = imgs.reshape(shape=(imgs.shape[0], 3, h, p, w, p))
+        x = imgs.reshape(shape=(imgs.shape[0], 3, h, p, w, p))  # 이 부분 왜 이런가?
         x = torch.einsum('nchpwq->nhwpqc', x)
         x = x.reshape(shape=(imgs.shape[0], h * w, p**2 * 3))
         return x
@@ -113,9 +113,13 @@ class MaskedAutoencoderViT(nn.Module):
         ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
         ids_restore = torch.argsort(ids_shuffle, dim=1)
 
+        #print(ids_shuffle.shape)
+
         # 유지할 patch 선택
-        ids_keep = #TODO
-        x_masked = #TODO
+        # TODO
+        ids_keep = ids_shuffle[:, :len_keep]
+        x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
+
 
         # mask 생성: 0은 keep, 1은 remove
         mask = torch.ones([N, L], device=x.device)
@@ -150,7 +154,32 @@ class MaskedAutoencoderViT(nn.Module):
 
     def forward_decoder(self, x, ids_restore):
         # TODO
+        # 디코더 임베딩 적용
+        x = self.decoder_embed(x)
 
+        # mask token 추가 (마스킹된 위치에 삽입)
+
+        #틀린코드-왜?-mask_tokens = self.mask_token.expand(x.shape[0], ids_restore.shape[1] - x.shape[1], -1)
+
+        mask_tokens = self.mask_token.expand(x.shape[0], ids_restore.shape[1] - (x.shape[1]-1), -1)
+        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # [CLS] 제외한 패치에 대해 확장
+        
+        #print(x_.shape, ids_restore.unsqueeze(-1).expand(-1, -1, x.shape[2]).shape)
+        # 원래 순서로 복원
+        x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).expand(-1, -1, x.shape[2]))
+
+        # CLS 토큰을 맨 앞에 추가
+        cls_token = x[:, :1, :]  # CLS 토큰 추출
+        x = torch.cat((cls_token, x_), dim=1)
+
+        # Transformer 디코더 블록 적용
+        for blk in self.decoder_blocks:
+            x = blk(x)
+        x = self.decoder_norm(x)
+
+        # 복원된 패치 예측
+        out = self.decoder_pred(x[:, 1:, :])  # [CLS] 제외한 부분에 대해 예측 수행
+        
         return out
 
     def forward_loss(self, imgs, pred, mask):

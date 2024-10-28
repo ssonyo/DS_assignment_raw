@@ -45,5 +45,21 @@ class ViT(nn.Module):
 
     def forward(self, x):
         # TODO
+
+        # 1. 패치 임베딩 수행
+        x = self.patch_embed(x)  # Shape: (B, N+1, embed_dim)
+
+        # 2. Transformer 블록 통과
+        x = self.blocks(x)  # 각 Block을 거치며 변환됨
+
+        # 3. CLS 토큰에 대해 정규화 수행 (x[:, 0]은 CLS 토큰에 해당)
+        x = self.norm(x)  # Shape: (B, N+1, embed_dim)
+
+        # 4. 분류를 위해 CLS 토큰만 선택
+        cls_token = x[:, 0]  # Shape: (B, embed_dim)
+
+        # 5. 분류 헤드에 통과
+        out = self.head(cls_token)  # Shape: (B, num_classes)
+
         
         return out

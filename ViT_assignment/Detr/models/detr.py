@@ -120,8 +120,14 @@ class SetCriterion(nn.Module):
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
 
-        loss_ce = F.cross_entropy(# TODO) # self.empty_weight로 no-object class의 가중치 조정
+        # TODO) # self.empty_weight로 no-object class의 가중치 조정
+        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
         losses = {'loss_ce': loss_ce}
+        # src_logits : 각 query에 대해 모든 class의 logit을 예측함. shape; (N, Q, C+1)
+        # target_classes : 정답 index
+        # src_logits 와 target_classes 간의 ce loss 를 구하면 됨.
+        # 이때 ce loss가 원하는대로 차원 변경하기 위해 transpose --> (N, C+1, Q)
+
 
         if log:
             losses['class_error'] = 100 - accuracy(src_logits[idx], target_classes_o)[0]
@@ -148,7 +154,12 @@ class SetCriterion(nn.Module):
         src_boxes = outputs['pred_boxes'][idx]
         target_boxes = torch.cat([t['boxes'][i] for t, (_, i) in zip(targets, indices)], dim=0)
 
-        loss_bbox = # TODO , reduction=none으로 설정
+        # TODO , reduction=none으로 설정
+        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+        # pred bounding box와 target bounding box의 loss(L1)을 최소로 함. shape; (N, Q, 4) <- (x_center, y_center, width, height)
+        # reduction=none? <= 각 쿼리별로 개별 손실 값을 유지하고, 나중에 각 쿼리를 조건에 따라 별도처리 할 수 있게 하기 위함! 
+        # (ex - no-obj class는 제외하고 물체가 있는 class 만 고려 가능)
+
 
         losses = {}
         losses['loss_bbox'] = loss_bbox.sum() / num_boxes
