@@ -167,3 +167,6 @@ CIFAR10/
 detr_env/
 mae_env/
 vit_env/
+
+dataset
+*.pth

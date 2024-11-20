@@ -4,10 +4,42 @@ from sklearn.preprocessing import StandardScaler
 import numpy as np
 import torch
 from PIL import Image
-
-
+import torch.nn.functional as F
+import torchvision.transforms as transforms
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+clip_normalization = transforms.Normalize(
+    mean=[0.48145466, 0.4578275, 0.40821073],
+    std=[0.26862954, 0.26130258, 0.27577711]
+)
+
+transform = transforms.Compose([
+    transforms.RandomResizedCrop(224, scale=(0.8, 1.0)), 
+    transforms.RandomHorizontalFlip(),                   
+    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),  
+    transforms.ToTensor(),                             
+    clip_normalization                                 
+])
+
+
+class UnsupervisedDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        image = self.dataset[idx]['image']
+        label = self.dataset[idx]['label']
+        image = Image.fromarray(np.array(image))
+
+        image1 = transform(image)
+        image2 = transform(image)
+        return image1, image2, label
+
+
 # Preprocess data
 class CustomDataset(torch.utils.data.Dataset):
     def __init__(self, dataset, preprocess):
@@ -120,3 +152,85 @@ def compute_ece(probs, labels, n_bins=100):
                 avg_confidence_in_bin = np.mean(probs[in_bin])
                 ece += np.abs(avg_confidence_in_bin - accuracy_in_bin) * prop_in_bin
     return ece
+
+
+# Contrastive learning (with class) loss
+class SupConLoss(torch.nn.Module):
+    def __init__(self, temperature=0.07):
+        super(SupConLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, features, labels):
+        # Normalize features for cosine similarity
+        features = F.normalize(features, dim=1)
+
+        batch_size = features.shape[0]
+        labels = labels.contiguous().view(-1, 1)
+
+        # Create mask for positive pairs
+        mask = torch.eq(labels, labels.T).float().to(features.device)
+
+        # Cosine similarity matrix
+        similarity_matrix = torch.matmul(features, features.T) / self.temperature
+
+        # Remove self-comparisons
+        logits_mask = torch.scatter(
+            torch.ones_like(mask),
+            1,
+            torch.arange(batch_size).view(-1, 1).to(features.device),
+            0
+        )
+        masked_logits = similarity_matrix * logits_mask
+
+        # Compute log probabilities
+        exp_logits = torch.exp(masked_logits)
+        log_probs = masked_logits - torch.log(exp_logits.sum(1, keepdim=True) + 1e-12)
+
+        # Positive pairs
+        pos_mask = mask * logits_mask
+        numerator = (log_probs * pos_mask).sum(1)
+        denominator = pos_mask.sum(1) + 1e-12  # Avoid division by zero
+
+        # Filter valid samples
+        valid_mask = denominator > 0
+        numerator = numerator[valid_mask]
+        denominator = denominator[valid_mask]
+
+        # Loss
+        loss = -numerator / denominator
+        print(loss)
+        print(len(loss))
+        # print(loss)  # Debugging: Check NaN
+        return loss.mean()
+
+
+
+# Contrastive loss (without class)
+class UnsupervisedContrastiveLoss(torch.nn.Module):
+    def __init__(self, temperature=0.07):
+        super(UnsupervisedContrastiveLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, features):
+        # Normalize features for cosine similarity
+        features = F.normalize(features, dim=1)
+        # Similarity matrix
+        similarity_matrix = torch.matmul(features, features.T)
+        similarity_matrix = similarity_matrix.to(torch.float32)  # 자료형이 float16이라 32로 변환. 안그러면 e^15이상에서 overflow 발생
+        similarity_matrix /= self.temperature
+
+        # Remove self-comparisons
+        mask = torch.eye(features.shape[0], dtype=torch.bool).to(features.device)
+        similarity_matrix = similarity_matrix.masked_fill(mask, -float("inf"))
+
+        # Compute probabilities
+        exp_sim = torch.exp(similarity_matrix)
+        exp_sim_sum = exp_sim.sum(dim=1) + 1e-8
+
+        batch_size = features.shape[0] // 2
+        pos_sim = torch.exp(torch.diagonal(similarity_matrix, offset=batch_size))
+
+        pos_sim_expanded = torch.cat([pos_sim, pos_sim])
+
+        loss = -torch.log(pos_sim_expanded / exp_sim_sum)
+        return loss.mean()
